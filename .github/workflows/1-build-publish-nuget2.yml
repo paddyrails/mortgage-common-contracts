@@ -4,31 +4,31 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Package version (e.g., 1.0.0)'
+        description: "Package version (e.g., 1.0.0)"
         required: true
-        default: '1.0.0'
+        default: "1.0.0"
       prerelease:
-        description: 'Is this a prerelease?'
+        description: "Is this a prerelease?"
         required: false
         default: false
         type: boolean
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - '*.csproj'
+      - "src/**"
+      - "*.csproj"
     tags:
-      - 'v*'
+      - "v*"
 
 env:
-  DOTNET_VERSION: '8.0.x'
-  PACKAGE_NAME: MortgageApp.Common.Contracts
+  DOTNET_VERSION: "8.0.x"
+  PACKAGE_NAME: Mortgage.Common.Contracts
 
 jobs:
   build-and-publish:
     name: Build and Publish NuGet Package
     runs-on: ubuntu-latest
-    
+
     outputs:
       version: ${{ steps.version.outputs.version }}
       package_name: ${{ env.PACKAGE_NAME }}
@@ -55,12 +55,12 @@ jobs:
             # Auto-generate version based on date and run number
             VERSION="1.0.${{ github.run_number }}"
           fi
-          
+
           # Add prerelease suffix if specified
           if [ "${{ github.event.inputs.prerelease }}" == "true" ]; then
             VERSION="${VERSION}-preview"
           fi
-          
+
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "📦 Package version: ${VERSION}"
 
@@ -75,7 +75,7 @@ jobs:
 
       - name: Pack NuGet package
         run: |
-          dotnet pack src/MortgageApp.Common.Contracts/MortgageApp.Common.Contracts.csproj \
+          dotnet pack src/Mortgage.Common.Contracts/Mortgage.Common.Contracts.csproj \
             --configuration Release \
             --no-build \
             --output ./nupkg \
@@ -116,7 +116,7 @@ jobs:
             --domain-owner ${{ vars.AWS_ACCOUNT_ID }} \
             --query authorizationToken \
             --output text)
-          
+
           # Get repository endpoint
           REPO_ENDPOINT=$(aws codeartifact get-repository-endpoint \
             --domain ${{ vars.CODEARTIFACT_DOMAIN }} \
@@ -125,14 +125,14 @@ jobs:
             --format nuget \
             --query repositoryEndpoint \
             --output text)
-          
+
           # Add source and push
           dotnet nuget add source "${REPO_ENDPOINT}v3/index.json" \
             --name codeartifact \
             --username aws \
             --password ${CODEARTIFACT_AUTH_TOKEN} \
             --store-password-in-clear-text
-          
+
           dotnet nuget push ./nupkg/*.nupkg \
             --source codeartifact \
             --skip-duplicate
