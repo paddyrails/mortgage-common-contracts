@@ -28,6 +28,9 @@ jobs:
   build-and-publish:
     name: Build and Publish NuGet Package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     outputs:
       version: ${{ steps.version.outputs.version }}
