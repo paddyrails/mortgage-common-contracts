@@ -1,0 +1,171 @@
+name: 1. Build and Publish NuGet Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+      prerelease:
+        description: 'Is this a prerelease?'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '*.csproj'
+    tags:
+      - 'v*'
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PACKAGE_NAME: MortgageApp.Common.Contracts
+
+jobs:
+  build-and-publish:
+    name: Build and Publish NuGet Package
+    runs-on: ubuntu-latest
+    
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package_name: ${{ env.PACKAGE_NAME }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            # Auto-generate version based on date and run number
+            VERSION="1.0.${{ github.run_number }}"
+          fi
+          
+          # Add prerelease suffix if specified
+          if [ "${{ github.event.inputs.prerelease }}" == "true" ]; then
+            VERSION="${VERSION}-preview"
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "📦 Package version: ${VERSION}"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet package
+        run: |
+          dotnet pack src/MortgageApp.Common.Contracts/MortgageApp.Common.Contracts.csproj \
+            --configuration Release \
+            --no-build \
+            --output ./nupkg \
+            /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: List packages
+        run: ls -la ./nupkg/
+
+      # ============================================
+      # Option 1: Publish to GitHub Packages
+      # ============================================
+      - name: Publish to GitHub Packages
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ secrets.GITHUB_TOKEN }} \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --skip-duplicate
+        env:
+          DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER: 0
+
+      # ============================================
+      # Option 2: Publish to AWS CodeArtifact
+      # ============================================
+      - name: Configure AWS credentials
+        if: vars.USE_CODEARTIFACT == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Publish to AWS CodeArtifact
+        if: vars.USE_CODEARTIFACT == 'true'
+        run: |
+          # Get CodeArtifact auth token
+          export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token \
+            --domain ${{ vars.CODEARTIFACT_DOMAIN }} \
+            --domain-owner ${{ vars.AWS_ACCOUNT_ID }} \
+            --query authorizationToken \
+            --output text)
+          
+          # Get repository endpoint
+          REPO_ENDPOINT=$(aws codeartifact get-repository-endpoint \
+            --domain ${{ vars.CODEARTIFACT_DOMAIN }} \
+            --domain-owner ${{ vars.AWS_ACCOUNT_ID }} \
+            --repository ${{ vars.CODEARTIFACT_REPOSITORY }} \
+            --format nuget \
+            --query repositoryEndpoint \
+            --output text)
+          
+          # Add source and push
+          dotnet nuget add source "${REPO_ENDPOINT}v3/index.json" \
+            --name codeartifact \
+            --username aws \
+            --password ${CODEARTIFACT_AUTH_TOKEN} \
+            --store-password-in-clear-text
+          
+          dotnet nuget push ./nupkg/*.nupkg \
+            --source codeartifact \
+            --skip-duplicate
+
+      # ============================================
+      # Option 3: Publish to Private NuGet Server (e.g., Nexus, Artifactory)
+      # ============================================
+      - name: Publish to Private NuGet Server
+        if: vars.NUGET_SERVER_URL != ''
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source ${{ vars.NUGET_SERVER_URL }} \
+            --skip-duplicate
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package
+          path: ./nupkg/*.nupkg
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## 📦 NuGet Package Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | ${{ env.PACKAGE_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Packages | ✅ Published |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage in other projects" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`xml" >> $GITHUB_STEP_SUMMARY
+          echo "<PackageReference Include=\"${{ env.PACKAGE_NAME }}\" Version=\"${{ steps.version.outputs.version }}\" />" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
